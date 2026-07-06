@@ -1,10 +1,17 @@
 #ifndef I2C_DMA_MASTER_H
 #define I2C_DMA_MASTER_H
-// #include "stm32f3xx_hal_i2c.h"
+
 #include "main.h"
-#include "stm32f3xx_hal_dma.h"
 #include <stdint.h>
 #include <stdbool.h>
+
+// if specific USING_I2CX commented out its ISR handler wont be defined
+
+#define USING_I2C1
+#define USING_I2C2
+#define USING_I2C3
+
+#include "i2c_dma_master_defines.h"
 
 typedef enum __attribute__((packed)){
     OK,
@@ -17,99 +24,92 @@ typedef enum __attribute__((packed)){
 }I2C_DMA_RET;
 
 enum{
-    MAX_I2Cs = 2,
+    MAX_I2Cs = 3,
     I2C1_POS = 0,
     I2C2_POS = 1,
-    STATE_UNINIT = 0,
-    STATE_READY = 1,
-    STATE_BUSY = 2,
-    DMA_UNINIT_STATE = 0,
-    DMA_READY_STATE  = 1,
-    DMA_BUSY_STATE   = 2,
+    I2C3_POS = 2,
+    STATE_UNINIT_I2C = 0,
+    STATE_READY_I2C = 1,
+    STATE_BUSY_I2C = 2,
+
+    I2C1_EV_INTER_NUM                = 31,     // I2C1 Event Interrupt & EXTI Line23 Interrupt
+    I2C1_ER_INTER_NUM                = 32,     // I2C1 Error Interrupt                        
+    I2C2_EV_INTER_NUM                = 33,     // I2C2 Event Interrupt & EXTI Line24 Interrupt
+    I2C2_ER_INTER_NUM                = 34,     // I2C2 Error Interrupt                        
+    I2C3_EV_INTER_NUM                = 72,     // I2C3 event interrupt                        
+    I2C3_ER_INTER_NUM                = 73,     // I2C3 Error Interrupt                        
+
+    RCCI2C1_ENABLE              = (1 << 21),
+    RCCI2C2_ENABLE              = (1 << 22),
+    RCCI2C3_ENABLE              = (1 << 30),
+
+    STOPGENERATECR2             = (1 << 14),
+
+    NACKFLAG                    = (1 << 4),
+    TCRFLAG                     = (1 << 7),
+    TCIEFLAG                    = (1 << 6),
+    STOPFLAG                    = (1 << 5),
+    ERRIEFLAG                   = (1 << 7), 
+    BERRFLAG                    = (1 << 8),
+    ARLOFLAG                    = (1 << 9),
+
+    DMATXERRORFLAG              = (1 << 3),
+    DMATXHALFCPLT               = (1 << 2),
+    DMATXCPLT                   = (1 << 1),
+    DMACCRCIRC                  = (1 << 5),
+    DMAGLISRFLAG                = 1,
     CLEARDMACCR                 = ~0x7FFE,
-    DMAENABLEFLAG               = 0x1
-};
-
-enum{
-    MAX_I2C_BUF_SIZE            = 0xFF,
-    NBYTESSHIFT                 = 16,
-    START                       = (1 << 13),
-    SLVADDRSHIFT                = 1,
-    CLEARISR                    = 0x3F38,
-    NACKFLAG                    = 0x10,
-    TCRFLAG                     = 0x80,
-    TCIEFLAG                    = 0x40,
-    STOPFLAG                    = 0x20,
-    ERRIEFLAG                   = 0x80, 
-    BERRFLAG                    = 0x100,
-    ARLOFLAG                    = 0x200,
-    TXIEFLAG                    = 0x2,
-    // CLEARDMACCR                 = ~0x7FFE,
-    CLEARCR2                    = ~0x2FF67FF,
-    STOPGENERATECR2             = 0x4000,
-    TXDMAENFLAG                 = 0x4000,
+    DMAENABLEFLAG               = 0x1,
+    TXDMAENFLAG                 = (1 << 14),
     RXDMAENFLAG                 = (1 << 15),
-    // DMAENABLEFLAG               = 0x1,
-    DMATXERRORFLAG              = 0x8,
-    DMATXHALFCPLT               = 0x4,
-    DMATXCPLT                   = 0x2,
-    I2CENABLE                   = 0x1,
-    GPIO_AFR_I2CAF              = 0x4,
-    I2C_PIN_POS                 = 0x8,
-    GPIO_PIN_HIGH_SPD           = 0x3,
-    GPIO_PIN_OPEN_DR            = 0x1,
-    GPIO_AF_MODE                = 0x2,
-    GPIO_AFR_RESET              = ~0xFF,
-    GPIO_AFR_ALL_SET            = 0xF,
-    NORMALIZE_PINS_0_TO_7_MASK  = 0x7,
-    GPIO_AFR_BITCOUNT           = 0x4,
-    GPIO_MODER_SET              = 0x3,
-    DUALADDRESS_ENABLE          = 0x8000,
-    I2CNACKCR2                  = (1 << 15),
-    I2CAUTOENDCR2               = (1 << 25),
-    I2CADD10ENABLE              = (1 << 11),
-    OWNADDRENABLE               = (1 << 15),
-    DMAMEMINCENABLE             = (1 << 7), 
-    DMADATAALIGNBYTE            = 0,
-    DMANOTCIRCULAR              = 0,
-    DMAMEMTOPERIPH_DIR          = (1 << 4),
-    I2C_READREQCR2              = (1 << 10),
-    I2C_7BITADDR_REC            = (1 << 12),
-    STANDARD_I2C_TIMING         = 0x00201D2B //TIMINGR register value for stm32f303RE, I2C uses HSI 8Mhz clock by default
 };
 
 typedef struct{
-    DMA_Channel_TypeDef   *Instance; // register base address
+    DMA_Channel_Def       *Instance; // register base address
     uint32_t               state;
-    DMA_TypeDef           *DmaBaseAddress;                // DMA Channel Base Address               
+    DMA_Def               *DmaBaseAddress;                // DMA Channel Base Address               
     uint32_t               ChannelIndex;
-    void                  (* XferCpltCallback)(void);     // DMA transfer complete callback         
-    void                  (* XferHalfCpltCallback)(void); // DMA Half transfer complete callback    
-    void                  (* XferErrorCallback)(void);    // DMA transfer error callback            
-}DMA_info;
+    void                (* XferCpltCallback)(void);     // DMA transfer complete user callback         
+    void                (* XferHalfCpltCallback)(void); // DMA Half transfer complete user callback    
+    void                (* XferErrorCallback)(void);    // DMA transfer error user callback            
+}DMA_info; // User should only set Instance and optionally set callbacks
 
 typedef struct{
-    I2C_TypeDef       *Instance; // register base address
+    I2C_Def           *Instance; // register base address
     uint8_t           *BuffPtr;
-    volatile uint16_t XferCount;
-    uint32_t          state;
-    DMA_info          txhdma;
-    DMA_info          rxhdma;
+    volatile uint16_t  XferCount;
+    uint32_t           state;
+    DMA_info           txhdma;
+    DMA_info           rxhdma;
 }I2C_info;
 
 extern I2C_info I2Cs[MAX_I2Cs];
 
-void I2C1_EV_IRQHandler(void);
-void I2C1_ER_IRQHandler(void);
-extern I2C_DMA_RET I2C_DMA_Init(I2C_TypeDef          *I2C_instance,
-                                GPIO_TypeDef         *GPIOONE,
+#ifdef USING_I2C1
+extern void I2C1_EV_IRQHandler(void);
+extern void I2C1_ER_IRQHandler(void);
+#endif
+
+#ifdef USING_I2C2
+extern void I2C2_EV_IRQHandler(void);
+extern void I2C2_ER_IRQHandler(void);
+#endif
+
+#ifdef USING_I2C3
+extern void I2C3_EV_IRQHandler(void);
+extern void I2C3_ER_IRQHandler(void);
+#endif
+
+extern I2C_DMA_RET I2C_DMA_Init(I2C_Def              *I2C_instance,
+                                GPIO_Def             *GPIOONE,
                                 uint8_t               pinonenum,
-                                GPIO_TypeDef         *GPIOTWO, 
+                                GPIO_Def             *GPIOTWO, 
                                 uint8_t               pintwonum, 
                                 DMA_info              TX_DMA_channel, // with only Instance and optional callbacks set
                                 DMA_info              RX_DMA_channel,// with only Instance and optional callbacks set
                                 bool                  I2C_10bit_adressing);
 extern I2C_DMA_RET I2C_DMA_master_tx(uint8_t *buf,uint16_t bufsize, uint8_t slvaddr, I2C_info * hi2c);
+extern I2C_DMA_RET I2C_DMA_master_rx(uint8_t *buf, uint16_t transfersize, uint8_t slvaddr, I2C_info * hi2c);
 
 inline void __attribute__((always_inline)) atomic_store(uint32_t * ptr, uint32_t value){
     __asm__ volatile(
@@ -170,7 +170,7 @@ inline void __attribute__((always_inline)) disable_dma(DMA_info * hdma){
     hdma->Instance->CNDTR = 0;
 
     __asm__ volatile ("dmb\n");
-    atomic_store(&hdma->state, DMA_READY_STATE); //TODO change to my structure
+    atomic_store(&hdma->state, STATE_READY_I2C); //TODO change to my structure
 }
 
 inline void __attribute__((always_inline)) I2C_DMA_ISR_handler(DMA_info * hdma, I2C_info * hi2c){
@@ -178,17 +178,17 @@ inline void __attribute__((always_inline)) I2C_DMA_ISR_handler(DMA_info * hdma, 
     uint32_t source_it = hdma->Instance->CCR;
 
     // Half Transfer Complete Interrupt management
-    if ((flag_it & (DMA_FLAG_HT1 << hdma->ChannelIndex)) && (source_it & DMA_IT_HT))
+    if ((flag_it & (DMATXHALFCPLT << hdma->ChannelIndex)) && (source_it & DMATXHALFCPLT))
     {
         /* Disable the half transfer interrupt if the DMA mode is not CIRCULAR */
-        if(!(source_it & DMA_CCR_CIRC))
+        if(!(source_it & DMACCRCIRC))
         {
             /* Disable the half transfer interrupt */
-            hdma->Instance->CCR &= ~DMA_IT_HT;
+            hdma->Instance->CCR &= ~DMATXHALFCPLT;
         }
 
         // Clear the half transfer complete flag 
-        hdma->DmaBaseAddress->IFCR = DMA_FLAG_HT1 << hdma->ChannelIndex;
+        hdma->DmaBaseAddress->IFCR = DMATXHALFCPLT << hdma->ChannelIndex;
 
         // DMA peripheral state is not updated in Half Transfer 
         // State is updated only in Transfer Complete case 
@@ -200,18 +200,18 @@ inline void __attribute__((always_inline)) I2C_DMA_ISR_handler(DMA_info * hdma, 
     }
 
     // Transfer Complete Interrupt management
-    else if ((flag_it & (DMA_FLAG_TC1 << hdma->ChannelIndex)) && (source_it & DMA_IT_TC))
+    else if ((flag_it & (DMATXCPLT << hdma->ChannelIndex)) && (source_it & DMATXCPLT))
     {
-        if(!(source_it & DMA_CCR_CIRC))
+        if(!(source_it & DMACCRCIRC))
         {
             /* Disable the transfer complete  & transfer error interrupts 
                if the DMA mode is not CIRCULAR */
-            hdma->Instance->CCR &= ~(DMA_IT_TC | DMA_IT_TE);
+            hdma->Instance->CCR &= ~(DMATXCPLT | DMATXERRORFLAG);
 
         }
 
         // Clear the transfer complete flag 
-        hdma->DmaBaseAddress->IFCR = DMA_FLAG_TC1 << hdma->ChannelIndex;
+        hdma->DmaBaseAddress->IFCR = DMATXCPLT << hdma->ChannelIndex;
 
         if(hdma->XferCpltCallback != NULL)
         {
@@ -220,15 +220,15 @@ inline void __attribute__((always_inline)) I2C_DMA_ISR_handler(DMA_info * hdma, 
     }
 
     // Transfer Error Interrupt management
-    else if ((flag_it & (DMA_FLAG_TE1 << hdma->ChannelIndex)) && (source_it & DMA_IT_TE))
+    else if ((flag_it & (DMATXERRORFLAG << hdma->ChannelIndex)) && (source_it & DMATXERRORFLAG))
     {
         /*  When a DMA transfer error occurs 
             A hardware clear of its EN bits is performed 
             Then, disable all DMA interrupts */
-        hdma->Instance->CCR &= ~(DMA_IT_TC | DMA_IT_HT | DMA_IT_TE);
+        hdma->Instance->CCR &= ~(DMATXCPLT | DMATXHALFCPLT | DMATXERRORFLAG);
 
         // Clear all flags 
-        hdma->DmaBaseAddress->IFCR = DMA_FLAG_GL1 << hdma->ChannelIndex;
+        hdma->DmaBaseAddress->IFCR = DMAGLISRFLAG << hdma->ChannelIndex;
         
         //disable dma requests
         hi2c->Instance->CR1 &= ~(TXDMAENFLAG | RXDMAENFLAG);

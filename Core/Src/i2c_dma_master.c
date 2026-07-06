@@ -1,20 +1,83 @@
 #include "i2c_dma_master.h"
-#include "cmsis_gcc.h"
 #include "stm32f303xe.h"
-#include "stm32f3xx_hal.h"
-#include "stm32f3xx_hal_def.h"
-#include "stm32f3xx_hal_dma.h"
-#include "stm32f3xx_hal_i2c.h"
-#include "stm32f3xx_hal_rcc_ex.h"
-// #include "stm32f3xx_hal_i2c.h"
 #include <stdint.h>
-#include <stdbool.h>
+
+enum{
+    GPIO_AFR_I2CAF              = 0x4,
+    GPIO_PIN_HIGH_SPD           = 0x3,
+    GPIO_PIN_OPEN_DR            = 0x1,
+    GPIO_AF_MODE                = 0x2,
+    GPIO_AFR_ALL_SET            = 0xF,
+    GPIO_AFR_BITCOUNT           = 0x4,
+    GPIO_MODER_SET              = 0x3,
+    NORMALIZE_PINS_0_TO_7_MASK  = 0x7,
+
+    DMAMEMINCENABLE             = (1 << 7), 
+    DMADATAALIGNBYTE            = 0,
+    DMANOTCIRCULAR              = 0,
+    DMAMEMTOPERIPH_DIR          = (1 << 4),
+
+    DMA1_AHBENRBIT              = 1,
+    DMA2_AHBENRBIT              = (1 << 1),
+    DMA1_NVICNUM_BASE           = 10,
+    DMA2_NVICNUM_BASE           = 55,
+
+    MAX_I2C_BUF_SIZE            = 0xFF,
+
+    I2CENABLE                   = 0x1,
+    NBYTESSHIFT                 = 16,
+    START                       = (1 << 13),
+
+    CLEARCR2                    = ~0x2FF67FF,
+    I2CNACKCR2                  = (1 << 15),
+    I2CAUTOENDCR2               = (1 << 25),
+    I2CRELOADCR2                = (1 << 24),
+    I2C_READREQCR2              = (1 << 10),
+
+    SLVADDRSHIFT                = 1,
+    DUALADDRESS_ENABLE          = (1 << 15),
+    I2CADD10ENABLE              = (1 << 11),
+    OWNADDRENABLE               = (1 << 15),
+    I2C_7BITADDR_REC            = (1 << 12),
+
+    STANDARD_I2C_TIMING         = 0x00201D2B //TIMINGR register value for stm32f303RE, I2C uses HSI 8Mhz clock by default
+};
+
+inline static void __attribute__((always_inline)) NVIC_setprio(uint32_t Interrupt_num, uint32_t PreemptPriority, uint32_t SubPriority)
+{
+    uint32_t prioritygroup = 0;
+  
+    // Check the parameters 
+    if(SubPriority >= 10)
+        SubPriority = 9;
+
+    if(PreemptPriority >= 10)
+        PreemptPriority = 9;
+  
+    // get priority group
+    prioritygroup = (((SCBB->AIRCR & SCB_AIRCR_PRIOGR_MASK) >> SCB_AIRCR_PRIOGR_POS));
+
+    prioritygroup &= 0x7;   // only values 0..7 are used          
+    uint32_t PreemptPriorityBits;
+    uint32_t SubPriorityBits;
+
+    PreemptPriorityBits = 7 - prioritygroup > NVIC_PRIO_BITS ? NVIC_PRIO_BITS : 7 - prioritygroup;
+    SubPriorityBits     = prioritygroup + NVIC_PRIO_BITS < 7 ?      0         : prioritygroup - 7 + NVIC_PRIO_BITS;
+
+    uint32_t priority = (PreemptPriority & ((1 << PreemptPriorityBits) - 1)) << SubPriorityBits;
+            priority |=  SubPriority     & ((1 << SubPriorityBits) - 1);
+  
+    NVICB->IP[Interrupt_num] = (uint8_t)((priority << (8 - NVIC_PRIO_BITS)) & 0xFF);
+}
+
+inline static void __attribute__((always_inline)) NVIC_enable(uint32_t Interrupt_num)
+{
+    NVICB->ISER[Interrupt_num >> 5] = (1 << (Interrupt_num & 0x1F));
+}
 
 I2C_info I2Cs[MAX_I2Cs];
 
-static void I2C_DMA_mastercont(I2C_info *hi2c, uint32_t ITFlags, uint32_t ITSources);
-
-inline static void __attribute__((always_inline)) set_gpio_afr(GPIO_TypeDef * GPIOX, uint8_t pinnum)
+inline static void __attribute__((always_inline)) set_gpio_afr(GPIO_Def * GPIOX, uint8_t pinnum)
 {
     uint32_t tempafr = GPIOX->AFR[pinnum >> 3];
     tempafr &= ~(GPIO_AFR_ALL_SET << ((pinnum & NORMALIZE_PINS_0_TO_7_MASK) * GPIO_AFR_BITCOUNT));
@@ -27,74 +90,54 @@ inline static void __attribute__((always_inline)) set_gpio_afr(GPIO_TypeDef * GP
     GPIOX->MODER = tempafr;
 }
 
-
-void I2C1_EV_IRQHandler(void)
-{
-  /* Get current IT Flags and IT sources value */
-    uint32_t itflags   = I2Cs[I2C1_POS].Instance->ISR;
-    uint32_t itsources = I2Cs[I2C1_POS].Instance->CR1;
-    I2C_DMA_mastercont(&I2Cs[I2C1_POS], itflags, itsources);
+inline static void __attribute__((always_inline)) set_if_unset_rcc_ahbenr_bit(uint32_t bit_to_check){
+    uint32_t tmp = RCCB->AHBENR;
+    if(!(tmp & bit_to_check))
+        RCCB->AHBENR |= bit_to_check;
 }
 
-// txdata can be written only when txe = 1
-
-
-void I2C1_ER_IRQHandler(void) // only for master 
-{
-    //TODO Errata 2.6.6 states that spurious bus error is detected (BERRFLAG is set) in master mode and to just clear it  
-
-
-    I2C_info *hi2c = &I2Cs[I2C1_POS];
-    // check if errors enabled
-    uint32_t tmperror = hi2c->Instance->CR1;
-    if(!(tmperror & ERRIEFLAG))
-        return;
-
-    tmperror  = hi2c->Instance->ISR & (BERRFLAG | ARLOFLAG);
-    if(!tmperror)
-        return;
-
-    if(tmperror == BERRFLAG){
-        hi2c->Instance->ICR |= BERRFLAG;
-        return;
-    }
-
-    uint32_t dmacheck = hi2c->Instance->CR1;
-    // Disable all relevant interrupts and dma except rxie and slave flags and smbus flags
-    // hi2c->Instance->CR1 &= ~(TXDMAENFLAG | RXDMAENFLAG | ERRIEFLAG | TCIEFLAG | STOPFLAG | NACKFLAG | TXIEFLAG);
-    hi2c->Instance->CR1 &= ~(TXDMAENFLAG | RXDMAENFLAG);
-
-    __asm__ volatile ("dmb\n");
-
-    if(dmacheck & TXDMAENFLAG)
-        disable_dma(&hi2c->txhdma);
-    else
-        disable_dma(&hi2c->rxhdma);
-
-    //clear cr2 regs
-    hi2c->Instance->CR2 &= CLEARCR2;
-
-    //clear relevant error interrupts
-    hi2c->Instance->ICR = tmperror;
-    
-    // while(hi2c->Instance->ISR & (1 << 15)); // busy bit set bug not mentioned in errata sheet :)))))))))))))
-
-    __asm__ volatile ("dmb\n");
-    hi2c->Instance->CR1 &= ~I2CENABLE;
-    hi2c->Instance->CR1;
-    __asm__ volatile ("dmb\n");
-    hi2c->Instance->CR1 |= I2CENABLE;
-    __asm__ volatile ("dmb\n");
-
-    atomic_store(&hi2c->state, STATE_READY);
-    /* 
-    giving info about error would be useless,
-    since we have to ignore BERRFLAG as per errata sheet and ARLO causes a busy bit set bug not mentioned in errata :)
-    */
+// sets up clock, nvic and inner structures
+inline static void __attribute__((always_inline)) set_DMA_internals(DMA_info * hdma){
+    #if defined (DMA2B)
+        if ((uint32_t)(hdma->Instance) < (uint32_t)(DMA2Ch1))
+        {
+            /* DMA1 */
+            set_if_unset_rcc_ahbenr_bit(DMA1_AHBENRBIT);
+            uint8_t channel_num = 1 + (((uint32_t)hdma->Instance - (uint32_t)DMA1Ch1) / ((uint32_t)DMA1Ch2 - (uint32_t)DMA1Ch1));
+            NVIC_setprio(DMA1_NVICNUM_BASE + channel_num, 0, 0);
+            NVIC_enable(DMA1_NVICNUM_BASE + channel_num);
+            hdma->ChannelIndex = (channel_num - 1) << 2U;
+            hdma->DmaBaseAddress = DMA1B;
+        }
+        else
+        {
+            /* DMA2 */
+            set_if_unset_rcc_ahbenr_bit(DMA2_AHBENRBIT);
+            uint8_t channel_num = 1 + (((uint32_t)hdma->Instance - (uint32_t)DMA2Ch1) / ((uint32_t)DMA2Ch2 - (uint32_t)DMA2Ch1));
+            NVIC_setprio(DMA2_NVICNUM_BASE + channel_num, 0, 0);
+            NVIC_enable(DMA2_NVICNUM_BASE + channel_num);
+            hdma->ChannelIndex = (channel_num - 1) << 2U;
+            hdma->DmaBaseAddress = DMA2B;
+        }
+    #else
+        /* DMA1 */
+        set_if_unset_rcc_ahbenr_bit(DMA1_AHBENRBIT);
+        uint8_t channel_num = 1 + (((uint32_t)hdma->Instance - (uint32_t)DMA1Ch1) / ((uint32_t)DMA1Ch2 - (uint32_t)DMA1Ch1));
+        NVIC_setprio(DMA1_NVICNUM_BASE + channel_num, 0, 0);
+        NVIC_enable(DMA1_NVICNUM_BASE + channel_num);
+        hdma->ChannelIndex = (channel_num - 1) << 2U;
+        hdma->DmaBaseAddress = DMA1B;
+    #endif
 }
 
-static void I2C_DMA_mastercont(I2C_info *hi2c, uint32_t ITFlags, uint32_t ITSources)
+inline static void __attribute__((always_inline)) enable_i2c_clock(uint32_t bit_to_enable){
+    RCCB->APB1ENR |= bit_to_enable;
+}
+
+inline static void __attribute__((always_inline)) I2C_DMA_mastercont(I2C_info *hi2c)
 {
+    uint32_t ITFlags   = hi2c->Instance->ISR;
+    uint32_t ITSources = hi2c->Instance->CR1;
     if(NACKFLAG & ITFlags & ITSources){
         //clear flag
         hi2c->Instance->ICR |= NACKFLAG;
@@ -118,13 +161,13 @@ static void I2C_DMA_mastercont(I2C_info *hi2c, uint32_t ITFlags, uint32_t ITSour
             {
                 XferSize = MAX_I2C_BUF_SIZE;
                 /* Set the new XferSize in Nbytes register */
-                hi2c->Instance->CR2 |= (MAX_I2C_BUF_SIZE << NBYTESSHIFT) | I2C_RELOAD_MODE;
+                hi2c->Instance->CR2 |= (MAX_I2C_BUF_SIZE << NBYTESSHIFT) | I2CRELOADCR2;
             }
             else
             {
                 XferSize = hi2c->XferCount;
                 /* Set the new XferSize in Nbytes register */
-                hi2c->Instance->CR2 |= (XferSize << NBYTESSHIFT) | I2C_AUTOEND_MODE;
+                hi2c->Instance->CR2 |= (XferSize << NBYTESSHIFT) | I2CAUTOENDCR2;
             }
 
             /* Update XferCount value */
@@ -145,7 +188,7 @@ static void I2C_DMA_mastercont(I2C_info *hi2c, uint32_t ITFlags, uint32_t ITSour
     if(TCIEFLAG & ITFlags & ITSources){
         if (hi2c->XferCount == 0)
         {
-            if (!(hi2c->Instance->CR2 & I2C_AUTOEND_MODE))
+            if (!(hi2c->Instance->CR2 & I2CAUTOENDCR2))
             {
                 hi2c->Instance->CR1 |= (STOPFLAG | TCIEFLAG);
                 __asm__ volatile ("dmb\n");
@@ -181,35 +224,127 @@ static void I2C_DMA_mastercont(I2C_info *hi2c, uint32_t ITFlags, uint32_t ITSour
         //clear CR2 requests
         hi2c->Instance->CR2 &= CLEARCR2;
 
-        atomic_store(&hi2c->state, STATE_READY);
+        atomic_store(&hi2c->state, STATE_READY_I2C);
     }
 }
 
-I2C_DMA_RET I2C_DMA_Init(I2C_TypeDef          *I2C_instance,
-                         GPIO_TypeDef         *GPIOONE,
+inline static void __attribute__((always_inline)) I2C_DMA_errorhandle(I2C_info * hi2c)
+{
+    //TODO Errata 2.6.6 states that spurious bus error is detected (BERRFLAG is set) in master mode and to just clear it  
+    // check if errors enabled
+    uint32_t tmperror = hi2c->Instance->CR1;
+    if(!(tmperror & ERRIEFLAG))
+        return;
+
+    tmperror  = hi2c->Instance->ISR & (BERRFLAG | ARLOFLAG);
+    if(!tmperror)
+        return;
+
+    if(tmperror == BERRFLAG){
+        hi2c->Instance->ICR |= BERRFLAG;
+        return;
+    }
+
+    uint32_t dmacheck = hi2c->Instance->CR1;
+    // Disable all relevant interrupts and dma except rxie and slave flags and smbus flags
+    // hi2c->Instance->CR1 &= ~(TXDMAENFLAG | RXDMAENFLAG | ERRIEFLAG | TCIEFLAG | STOPFLAG | NACKFLAG | TXIEFLAG);
+    hi2c->Instance->CR1 &= ~(TXDMAENFLAG | RXDMAENFLAG);
+
+    __asm__ volatile ("dmb\n");
+
+    if(dmacheck & TXDMAENFLAG)
+        disable_dma(&hi2c->txhdma);
+    else
+        disable_dma(&hi2c->rxhdma);
+
+    //clear cr2 regs
+    hi2c->Instance->CR2 &= CLEARCR2;
+
+    //clear relevant error interrupts
+    hi2c->Instance->ICR = tmperror;
+    
+    __asm__ volatile ("dmb\n");
+    hi2c->Instance->CR1 &= ~I2CENABLE;
+    hi2c->Instance->CR1;
+    __asm__ volatile ("dmb\n");
+    hi2c->Instance->CR1 |= I2CENABLE;
+    __asm__ volatile ("dmb\n");
+
+    atomic_store(&hi2c->state, STATE_READY_I2C);
+    /* 
+    giving info about error would be useless,
+    since we have to ignore BERRFLAG as per errata sheet and ARLO causes a busy bit set bug, not mentioned in errata :)
+    */
+}
+
+#ifdef USING_I2C1
+void I2C1_EV_IRQHandler(void)
+{
+    I2C_DMA_mastercont(&I2Cs[I2C1_POS]);
+}
+
+void I2C1_ER_IRQHandler(void) // only for master 
+{
+    I2C_DMA_errorhandle(&I2Cs[I2C1_POS]);
+}
+#endif
+
+#ifdef USING_I2C2
+void I2C2_EV_IRQHandler(void)
+{
+    I2C_DMA_mastercont(&I2Cs[I2C1_POS]);
+}
+
+void I2C2_ER_IRQHandler(void) // only for master 
+{
+    I2C_DMA_errorhandle(&I2Cs[I2C1_POS]);
+}
+#endif
+
+#ifdef USING_I2C3
+void I2C3_EV_IRQHandler(void)
+{
+    I2C_DMA_mastercont(&I2Cs[I2C1_POS]);
+}
+
+void I2C3_ER_IRQHandler(void) // only for master 
+{
+    I2C_DMA_errorhandle(&I2Cs[I2C1_POS]);
+}
+#endif
+
+I2C_DMA_RET I2C_DMA_Init(I2C_Def              *I2C_instance,
+                         GPIO_Def             *GPIOONE,
                          uint8_t               pinonenum,
-                         GPIO_TypeDef         *GPIOTWO, 
+                         GPIO_Def             *GPIOTWO, 
                          uint8_t               pintwonum, 
                          DMA_info              TX_DMA_info,
                          DMA_info              RX_DMA_info,
                          bool                  I2C_10bit_adressing)
 {
-    if(I2C_instance != I2C1 && I2C_instance != I2C2)
+    if(I2C_instance != I2C1B && I2C_instance != I2C2B && I2C_instance != I2C3B)
         return WRONG_ARGS;
 
     I2C_info * hi2c = NULL;
-    if(I2C_instance == I2C1)
+    if(I2C_instance == I2C1B)
     {
-        if(!atomic_cas(&I2Cs[I2C1_POS].state, STATE_BUSY, STATE_UNINIT))
+        if(!atomic_cas(&I2Cs[I2C1_POS].state, STATE_BUSY_I2C, STATE_UNINIT_I2C))
             return ALREADY_INITILIZED;
         hi2c = &I2Cs[I2C1_POS];
     }
-    else // as there can only be 2 I2Cs on my system and we pre checked on function entry
+    else if(I2C_instance == I2C2B)
     {
-        if(!atomic_cas(&I2Cs[I2C2_POS].state, STATE_BUSY, STATE_UNINIT))
+        if(!atomic_cas(&I2Cs[I2C2_POS].state, STATE_BUSY_I2C, STATE_UNINIT_I2C))
             return ALREADY_INITILIZED;
         hi2c = &I2Cs[I2C2_POS];
     }
+    else
+    {
+        if(!atomic_cas(&I2Cs[I2C3_POS].state, STATE_BUSY_I2C, STATE_UNINIT_I2C))
+            return ALREADY_INITILIZED;
+        hi2c = &I2Cs[I2C3_POS];
+    }
+
     if (hi2c == NULL)
         return I2C_INIT_ERROR;
 
@@ -223,7 +358,7 @@ I2C_DMA_RET I2C_DMA_Init(I2C_TypeDef          *I2C_instance,
     GPIOONE->OTYPER |= GPIO_PIN_OPEN_DR << pinonenum;
     GPIOTWO->OTYPER |= GPIO_PIN_OPEN_DR << pintwonum;
 
-    // // // disable pulldowns
+    // disable pulldowns
     // GPIOONE->PUPDR &= ~(0x3 << (pinonenum * 2));
     // GPIOTWO->PUPDR &= ~(0x3 << (pintwonum * 2));
 
@@ -232,10 +367,12 @@ I2C_DMA_RET I2C_DMA_Init(I2C_TypeDef          *I2C_instance,
     set_gpio_afr(GPIOONE, pinonenum);
     set_gpio_afr(GPIOTWO, pintwonum);
 
-    if(hi2c->Instance == I2C1)//TODO replace
-        __HAL_RCC_I2C1_CLK_ENABLE();
+    if (hi2c->Instance == I2C1B)
+        enable_i2c_clock(RCCI2C1_ENABLE);
+    else if (hi2c->Instance == I2C2B)
+        enable_i2c_clock(RCCI2C2_ENABLE);
     else
-        __HAL_RCC_I2C2_CLK_ENABLE();
+        enable_i2c_clock(RCCI2C3_ENABLE);
 
     hi2c->txhdma = TX_DMA_info;
     hi2c->rxhdma = RX_DMA_info;
@@ -243,8 +380,8 @@ I2C_DMA_RET I2C_DMA_Init(I2C_TypeDef          *I2C_instance,
     if(hi2c->txhdma.Instance != NULL){
         DMA_info * txhdma = &hi2c->txhdma;//TODO replace by my own structure and callback
 
-        if(!atomic_cas(&txhdma->state, DMA_BUSY_STATE, DMA_UNINIT_STATE)){
-            atomic_store(&hi2c->state, STATE_UNINIT);
+        if(!atomic_cas(&txhdma->state, STATE_BUSY_I2C,STATE_UNINIT_I2C)){
+            atomic_store(&hi2c->state, STATE_UNINIT_I2C);
             return DMA_INIT_ERROR;
         }
         
@@ -268,33 +405,16 @@ I2C_DMA_RET I2C_DMA_Init(I2C_TypeDef          *I2C_instance,
         txhdma->Instance->CCR = tmpdmaccr;
 
         /* calculation of the channel index */
-        #if defined (DMA2)
-            if ((uint32_t)(txhdma->Instance) < (uint32_t)(DMA2_Channel1))
-            {
-                /* DMA1 */
-                txhdma->ChannelIndex = (((uint32_t)txhdma->Instance - (uint32_t)DMA1_Channel1) / ((uint32_t)DMA1_Channel2 - (uint32_t)DMA1_Channel1)) << 2U;
-                txhdma->DmaBaseAddress = DMA1;
-            }
-            else
-            {
-                /* DMA2 */
-                txhdma->ChannelIndex = (((uint32_t)txhdma->Instance - (uint32_t)DMA2_Channel1) / ((uint32_t)DMA2_Channel2 - (uint32_t)DMA2_Channel1)) << 2U;
-                txhdma->DmaBaseAddress = DMA2;
-            }
-        #else
-            /* DMA1 */
-            txhdma->ChannelIndex = (((uint32_t)txhdma->Instance - (uint32_t)DMA1_Channel1) / ((uint32_t)DMA1_Channel2 - (uint32_t)DMA1_Channel1)) << 2U;
-            txhdma->DmaBaseAddress = DMA1;
-        #endif
+        set_DMA_internals(txhdma);
 
-        atomic_store(&txhdma->state, DMA_READY_STATE); 
+        atomic_store(&txhdma->state, STATE_READY_I2C); 
     }
 
     if(hi2c->rxhdma.Instance != NULL){
         DMA_info * rxhdma = &hi2c->rxhdma; //TODO replace by my own structure and callback
 
-        if(!atomic_cas(&rxhdma->state, DMA_BUSY_STATE, DMA_UNINIT_STATE)){
-            atomic_store(&hi2c->state, STATE_UNINIT);
+        if(!atomic_cas(&rxhdma->state, STATE_BUSY_I2C,STATE_UNINIT_I2C)){
+            atomic_store(&hi2c->state, STATE_UNINIT_I2C);
             return DMA_INIT_ERROR;
         }
 
@@ -317,26 +437,9 @@ I2C_DMA_RET I2C_DMA_Init(I2C_TypeDef          *I2C_instance,
         rxhdma->Instance->CCR = tmpdmaccr;
 
         /* calculation of the channel index */
-        #if defined (DMA2)
-            if ((uint32_t)(rxhdma->Instance) < (uint32_t)(DMA2_Channel1))
-            {
-                /* DMA1 */
-                rxhdma->ChannelIndex = (((uint32_t)rxhdma->Instance - (uint32_t)DMA1_Channel1) / ((uint32_t)DMA1_Channel2 - (uint32_t)DMA1_Channel1)) << 2U;
-                rxhdma->DmaBaseAddress = DMA1;
-            }
-            else
-            {
-                /* DMA2 */
-                rxhdma->ChannelIndex = (((uint32_t)rxhdma->Instance - (uint32_t)DMA2_Channel1) / ((uint32_t)DMA2_Channel2 - (uint32_t)DMA2_Channel1)) << 2U;
-                rxhdma->DmaBaseAddress = DMA2;
-            }
-        #else
-            /* DMA1 */
-            rxhdma->ChannelIndex = (((uint32_t)rxhdma->Instance - (uint32_t)DMA1_Channel1) / ((uint32_t)DMA1_Channel2 - (uint32_t)DMA1_Channel1)) << 2U;
-            rxhdma->DmaBaseAddress = DMA1;
-        #endif
+        set_DMA_internals(rxhdma);
 
-        atomic_store(&rxhdma->state, DMA_READY_STATE);
+        atomic_store(&rxhdma->state, STATE_READY_I2C);
     }
 
     /* Disable the selected I2C peripheral */
@@ -374,7 +477,26 @@ I2C_DMA_RET I2C_DMA_Init(I2C_TypeDef          *I2C_instance,
     /* Enable the selected I2C peripheral */
     hi2c->Instance->CR1 |= I2CENABLE;
 
-    atomic_store(&hi2c->state, STATE_READY);
+    if(hi2c->Instance == I2C1B){
+        NVIC_setprio(I2C1_EV_INTER_NUM, 0, 0);
+        NVIC_setprio(I2C1_ER_INTER_NUM, 0, 0);
+        NVIC_enable(I2C1_EV_INTER_NUM);
+        NVIC_enable(I2C1_ER_INTER_NUM);
+    }
+    else if(hi2c->Instance == I2C2B){
+        NVIC_setprio(I2C2_EV_INTER_NUM, 0, 0);
+        NVIC_setprio(I2C2_ER_INTER_NUM, 0, 0);
+        NVIC_enable(I2C2_EV_INTER_NUM);
+        NVIC_enable(I2C2_ER_INTER_NUM);
+    }
+    else{
+        NVIC_setprio(I2C3_EV_INTER_NUM, 0, 0);
+        NVIC_setprio(I2C3_ER_INTER_NUM, 0, 0);
+        NVIC_enable(I2C3_EV_INTER_NUM);
+        NVIC_enable(I2C3_ER_INTER_NUM);
+    }
+
+    atomic_store(&hi2c->state, STATE_READY_I2C);
     return OK;
 }
 
@@ -383,11 +505,11 @@ I2C_DMA_RET I2C_DMA_master_tx(uint8_t *buf, uint16_t bufsize, uint8_t slvaddr, I
     if(!bufsize | !buf | (slvaddr & 0x80) | !hi2c)
         return WRONG_ARGS;
 
-    if(!atomic_cas(&hi2c->state, STATE_BUSY, STATE_READY))
+    if(!atomic_cas(&hi2c->state, STATE_BUSY_I2C, STATE_READY_I2C))
         return I2C_BUSY;
 
-    if(!atomic_cas(&hi2c->txhdma.state, DMA_BUSY_STATE, DMA_READY_STATE)){
-        atomic_store(&hi2c->state, STATE_READY);
+    if(!atomic_cas(&hi2c->txhdma.state, STATE_BUSY_I2C, STATE_READY_I2C)){
+        atomic_store(&hi2c->state, STATE_READY_I2C);
         return DMA_BUSY;
     }
 
@@ -395,11 +517,11 @@ I2C_DMA_RET I2C_DMA_master_tx(uint8_t *buf, uint16_t bufsize, uint8_t slvaddr, I
     uint8_t XferSize = 0;
     if(bufsize > MAX_I2C_BUF_SIZE){
         XferSize = MAX_I2C_BUF_SIZE;
-        tmpcr2 = I2C_RELOAD_MODE;
+        tmpcr2 = I2CRELOADCR2;
     }
     else{
         XferSize = bufsize;
-        tmpcr2 = I2C_AUTOEND_MODE;
+        tmpcr2 = I2CAUTOENDCR2;
     }
     
     tmpcr2 |= XferSize << NBYTESSHIFT;
@@ -421,7 +543,7 @@ I2C_DMA_RET I2C_DMA_master_tx(uint8_t *buf, uint16_t bufsize, uint8_t slvaddr, I
     __asm__ volatile ("dmb\n");
 
     /* Configure the source, destination address and the data length */
-    hdma->DmaBaseAddress->IFCR  = (DMA_FLAG_GL1 << hdma->ChannelIndex);
+    hdma->DmaBaseAddress->IFCR  = (DMAGLISRFLAG << hdma->ChannelIndex);
 
     /* Configure DMA Channel data length */
     hdma->Instance->CNDTR = hi2c->XferCount;
@@ -468,11 +590,11 @@ I2C_DMA_RET I2C_DMA_master_rx(uint8_t *buf, uint16_t transfersize, uint8_t slvad
     if(!transfersize | !buf | (slvaddr & 0x80) | !hi2c)
         return WRONG_ARGS;
 
-    if(!atomic_cas(&hi2c->state, STATE_BUSY, STATE_READY))
+    if(!atomic_cas(&hi2c->state, STATE_BUSY_I2C, STATE_READY_I2C))
         return I2C_BUSY;
 
-    if(!atomic_cas(&hi2c->rxhdma.state, DMA_BUSY_STATE, DMA_READY_STATE)){
-        atomic_store(&hi2c->state, STATE_READY);
+    if(!atomic_cas(&hi2c->rxhdma.state, STATE_BUSY_I2C, STATE_READY_I2C)){
+        atomic_store(&hi2c->state, STATE_READY_I2C);
         return DMA_BUSY;
     }
 
@@ -480,11 +602,11 @@ I2C_DMA_RET I2C_DMA_master_rx(uint8_t *buf, uint16_t transfersize, uint8_t slvad
     uint8_t XferSize = 0;
     if(transfersize > MAX_I2C_BUF_SIZE){
         XferSize = MAX_I2C_BUF_SIZE;
-        tmpcr2 = I2C_RELOAD_MODE;
+        tmpcr2 = I2CRELOADCR2;
     }
     else{
         XferSize = transfersize;
-        tmpcr2 = I2C_AUTOEND_MODE;
+        tmpcr2 = I2CAUTOENDCR2;
     }
     
     tmpcr2 |= XferSize << NBYTESSHIFT;
@@ -506,7 +628,7 @@ I2C_DMA_RET I2C_DMA_master_rx(uint8_t *buf, uint16_t transfersize, uint8_t slvad
     __asm__ volatile ("dmb\n");
 
     /* Configure the source, destination address and the data length */
-    hdma->DmaBaseAddress->IFCR  = (DMA_FLAG_GL1 << hdma->ChannelIndex);
+    hdma->DmaBaseAddress->IFCR  = (DMAGLISRFLAG << hdma->ChannelIndex);
 
     /* Configure DMA Channel data length */
     hdma->Instance->CNDTR = hi2c->XferCount;
