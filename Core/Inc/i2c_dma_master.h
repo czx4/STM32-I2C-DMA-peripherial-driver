@@ -170,7 +170,7 @@ inline void __attribute__((always_inline)) disable_dma(DMA_info * hdma){
     hdma->Instance->CNDTR = 0;
 
     __asm__ volatile ("dmb\n");
-    atomic_store(&hdma->state, STATE_READY_I2C); //TODO change to my structure
+    atomic_store(&hdma->state, STATE_READY_I2C);
 }
 
 inline void __attribute__((always_inline)) I2C_DMA_ISR_handler(DMA_info * hdma, I2C_info * hi2c){
@@ -180,10 +180,10 @@ inline void __attribute__((always_inline)) I2C_DMA_ISR_handler(DMA_info * hdma, 
     // Half Transfer Complete Interrupt management
     if ((flag_it & (DMATXHALFCPLT << hdma->ChannelIndex)) && (source_it & DMATXHALFCPLT))
     {
-        /* Disable the half transfer interrupt if the DMA mode is not CIRCULAR */
+        // Disable the half transfer interrupt if the DMA mode is not CIRCULAR 
         if(!(source_it & DMACCRCIRC))
         {
-            /* Disable the half transfer interrupt */
+            // Disable the half transfer interrupt 
             hdma->Instance->CCR &= ~DMATXHALFCPLT;
         }
 

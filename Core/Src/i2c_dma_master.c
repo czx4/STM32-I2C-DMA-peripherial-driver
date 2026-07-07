@@ -111,7 +111,7 @@ inline static void __attribute__((always_inline)) set_DMA_internals(DMA_info * h
     #if defined (DMA2B)
         if ((uint32_t)(hdma->Instance) < (uint32_t)(DMA2Ch1))
         {
-            /* DMA1 */
+            // DMA1 
             set_if_unset_rcc_ahbenr_bit(DMA1_AHBENRBIT);
             uint8_t channel_num = 1 + (((uint32_t)hdma->Instance - (uint32_t)DMA1Ch1) / ((uint32_t)DMA1Ch2 - (uint32_t)DMA1Ch1));
             NVIC_setprio(DMA1_NVICNUM_BASE + channel_num, 0, 0);
@@ -121,7 +121,7 @@ inline static void __attribute__((always_inline)) set_DMA_internals(DMA_info * h
         }
         else
         {
-            /* DMA2 */
+            // DMA2 
             set_if_unset_rcc_ahbenr_bit(DMA2_AHBENRBIT);
             uint8_t channel_num = 1 + (((uint32_t)hdma->Instance - (uint32_t)DMA2Ch1) / ((uint32_t)DMA2Ch2 - (uint32_t)DMA2Ch1));
             NVIC_setprio(DMA2_NVICNUM_BASE + channel_num, 0, 0);
@@ -130,7 +130,7 @@ inline static void __attribute__((always_inline)) set_DMA_internals(DMA_info * h
             hdma->DmaBaseAddress = DMA2B;
         }
     #else
-        /* DMA1 */
+        // DMA1 
         set_if_unset_rcc_ahbenr_bit(DMA1_AHBENRBIT);
         uint8_t channel_num = 1 + (((uint32_t)hdma->Instance - (uint32_t)DMA1Ch1) / ((uint32_t)DMA1Ch2 - (uint32_t)DMA1Ch1));
         NVIC_setprio(DMA1_NVICNUM_BASE + channel_num, 0, 0);
@@ -197,21 +197,21 @@ inline static void __attribute__((always_inline)) I2C_DMA_mastercont(I2C_info *h
         if (hi2c->XferCount != 0)
         {
             uint8_t XferSize = 0; 
-            /* Prepare the new XferSize to transfer */
+            // Prepare the new XferSize to transfer 
             if (hi2c->XferCount > MAX_I2C_BUF_SIZE)
             {
                 XferSize = MAX_I2C_BUF_SIZE;
-                /* Set the new XferSize in Nbytes register */
+                // Set the new XferSize in Nbytes register 
                 hi2c->Instance->CR2 |= (MAX_I2C_BUF_SIZE << NBYTESSHIFT) | I2CRELOADCR2;
             }
             else
             {
                 XferSize = hi2c->XferCount;
-                /* Set the new XferSize in Nbytes register */
+                // Set the new XferSize in Nbytes register 
                 hi2c->Instance->CR2 |= (XferSize << NBYTESSHIFT) | I2CAUTOENDCR2;
             }
 
-            /* Update XferCount value */
+            // Update XferCount value 
             hi2c->XferCount -= XferSize;
         }
         else{
@@ -233,7 +233,7 @@ inline static void __attribute__((always_inline)) I2C_DMA_mastercont(I2C_info *h
             {
                 hi2c->Instance->CR1 |= (STOPFLAG | TCIEFLAG);
                 __asm__ volatile ("dmb\n");
-                /* Generate Stop */
+                // Generate Stop 
                 hi2c->Instance->CR2 |= STOPGENERATECR2;
             }
         }
@@ -242,10 +242,10 @@ inline static void __attribute__((always_inline)) I2C_DMA_mastercont(I2C_info *h
             //theoritically unreachable
             hi2c->Instance->CR1 |= (STOPFLAG | TCIEFLAG);
             __asm__ volatile ("dmb\n");
-            /* Generate Stop */
+            // Generate Stop 
             hi2c->Instance->CR2 |= STOPGENERATECR2;
 
-            /* Wrong size Status regarding TC flag event */
+            // Wrong size Status regarding TC flag event 
         }
     }
     if(STOPFLAG & ITFlags & ITSources)
@@ -271,8 +271,8 @@ inline static void __attribute__((always_inline)) I2C_DMA_mastercont(I2C_info *h
 
 inline static void __attribute__((always_inline)) I2C_DMA_errorhandle(I2C_info * hi2c)
 {
-    //TODO Errata 2.6.6 states that spurious bus error is detected (BERRFLAG is set) in master mode and to just clear it  
-    // check if errors enabled
+    //Errata 2.6.6 states that spurious bus error is detected (BERRFLAG is set) in master mode and to just clear it  
+
     uint32_t tmperror = hi2c->Instance->CR1;
     if(!(tmperror & ERRIEFLAG))
         return;
@@ -406,8 +406,8 @@ I2C_DMA_RET I2C_DMA_Init(I2C_Def              *I2C_instance,
     GPIOTWO->OTYPER |= GPIO_PIN_OPEN_DR << pintwonum;
 
     // disable pulldowns
-    // GPIOONE->PUPDR &= ~(0x3 << (pinonenum * 2));
-    // GPIOTWO->PUPDR &= ~(0x3 << (pintwonum * 2));
+    GPIOONE->PUPDR &= ~(0x3 << (pinonenum * 2));
+    GPIOTWO->PUPDR &= ~(0x3 << (pintwonum * 2));
 
     // set AFR and MODER for I2C
     __asm__ volatile ("dmb\n");
@@ -425,7 +425,7 @@ I2C_DMA_RET I2C_DMA_Init(I2C_Def              *I2C_instance,
     hi2c->rxhdma = RX_DMA_info;
 
     if(hi2c->txhdma.Instance != NULL){
-        DMA_info * txhdma = &hi2c->txhdma;//TODO replace by my own structure and callback
+        DMA_info * txhdma = &hi2c->txhdma;
 
         if(!atomic_cas(&txhdma->state, STATE_BUSY_I2C,STATE_UNINIT_I2C)){
             atomic_store(&hi2c->state, STATE_UNINIT_I2C);
@@ -447,18 +447,18 @@ I2C_DMA_RET I2C_DMA_Init(I2C_Def              *I2C_instance,
 
         tmpdmaccr |= DMANOTCIRCULAR;
 
-        /* Write to DMA Channel CR register */
+        // Write to DMA Channel CR register 
         __asm__ volatile ("dmb\n");
         txhdma->Instance->CCR = tmpdmaccr;
 
-        /* calculation of the channel index */
+        // calculation of the channel index 
         set_DMA_internals(txhdma);
 
         atomic_store(&txhdma->state, STATE_READY_I2C); 
     }
 
     if(hi2c->rxhdma.Instance != NULL){
-        DMA_info * rxhdma = &hi2c->rxhdma; //TODO replace by my own structure and callback
+        DMA_info * rxhdma = &hi2c->rxhdma; 
 
         if(!atomic_cas(&rxhdma->state, STATE_BUSY_I2C,STATE_UNINIT_I2C)){
             atomic_store(&hi2c->state, STATE_UNINIT_I2C);
@@ -480,21 +480,20 @@ I2C_DMA_RET I2C_DMA_Init(I2C_Def              *I2C_instance,
 
         tmpdmaccr |= DMANOTCIRCULAR;
 
-        /* Write to DMA Channel CR register */
+        // Write to DMA Channel CR register 
         rxhdma->Instance->CCR = tmpdmaccr;
 
-        /* calculation of the channel index */
+        // calculation of the channel index 
         set_DMA_internals(rxhdma);
 
         atomic_store(&rxhdma->state, STATE_READY_I2C);
     }
 
-    /* Disable the selected I2C peripheral */
+    // Disable the selected I2C peripheral 
     hi2c->Instance->CR1 &= ~I2CENABLE;
     __asm__ volatile ("dmb\n");
 
-    /* Configure I2Cx: Frequency range */
-    // hi2c->Instance->TIMINGR = Timing & TIMING_CLEAR_MASK;
+    // Configure I2Cx: Frequency range 
     hi2c->Instance->TIMINGR = STANDARD_I2C_TIMING;
 
     // Disable Own Address1 
@@ -503,7 +502,7 @@ I2C_DMA_RET I2C_DMA_Init(I2C_Def              *I2C_instance,
     // disable own address 2
     hi2c->Instance->OAR2 &= ~DUALADDRESS_ENABLE;
 
-    /* Configure I2Cx: Addressing Master mode */
+    // Configure I2Cx: Addressing Master mode 
     if (I2C_10bit_adressing)
     {
         hi2c->Instance->CR2 |= I2CADD10ENABLE;
@@ -517,11 +516,11 @@ I2C_DMA_RET I2C_DMA_Init(I2C_Def              *I2C_instance,
     // Enable the AUTOEND by default, and enable NACK (should be disable only during Slave process)
     hi2c->Instance->CR2 |= (I2CAUTOENDCR2 | I2CNACKCR2);
 
-    /*---------------------------- I2Cx CR1 Configuration ----------------------*/
-    /* Configure I2Cx: Generalcall and NoStretch mode and enable analog filter */
+    //---------------------------- I2Cx CR1 Configuration ----------------------
+    // Configure I2Cx: Generalcall and NoStretch mode and enable analog filter 
     hi2c->Instance->CR1 = 0;
 
-    /* Enable the selected I2C peripheral */
+    // Enable the selected I2C peripheral 
     hi2c->Instance->CR1 |= I2CENABLE;
 
     if(hi2c->Instance == I2C1B){
@@ -582,28 +581,27 @@ I2C_DMA_RET I2C_DMA_master_tx(uint8_t *buf, uint16_t bufsize, uint8_t slvaddr, I
 
     //DMA config
 
-    // hi2c->XferISR = I2C_DMA_mastertxcont;
     DMA_info * hdma = &hi2c->txhdma;
 
-    /* Disable the peripheral */
+    // Disable the peripheral 
     hdma->Instance->CCR &= ~DMAENABLEFLAG;
     __asm__ volatile ("dmb\n");
 
-    /* Configure the source, destination address and the data length */
+    // Configure the source, destination address and the data length 
     hdma->DmaBaseAddress->IFCR  = (DMAGLISRFLAG << hdma->ChannelIndex);
 
-    /* Configure DMA Channel data length */
+    // Configure DMA Channel data length 
     hdma->Instance->CNDTR = hi2c->XferCount;
 
-    /* Configure DMA Channel memory address */
+    // Configure DMA Channel memory address 
     hdma->Instance->CMAR =(uint32_t) hi2c->BuffPtr;
 
-    /* Configure DMA Channel peripherial address */
+    // Configure DMA Channel peripherial address 
     hdma->Instance->CPAR =(uint32_t) &hi2c->Instance->TXDR;
 
 
-    /* Enable the transfer complete, & transfer error interrupts */
-    /* Half transfer interrupt is optional: enable it only if associated callback is available */
+    // Enable the transfer complete, & transfer error interrupts 
+    // Half transfer interrupt is optional: enable it only if associated callback is available 
     if(NULL != hdma->XferHalfCpltCallback )
     {
         hdma->Instance->CCR |= (DMATXCPLT | DMATXHALFCPLT | DMATXERRORFLAG);
@@ -613,13 +611,13 @@ I2C_DMA_RET I2C_DMA_master_tx(uint8_t *buf, uint16_t bufsize, uint8_t slvaddr, I
         hdma->Instance->CCR |= (DMATXCPLT | DMATXERRORFLAG);
         hdma->Instance->CCR &= ~DMATXHALFCPLT;
     }
-    /* Enable the Peripheral */
+    // Enable the Peripheral 
     __asm__ volatile ("dmb\n");
     hdma->Instance->CCR |= DMAENABLEFLAG;
     
     hi2c->XferCount -= XferSize;
 
-    /* Enable DMA Request */
+    // Enable DMA Request 
     hi2c->Instance->CR1 |= TXDMAENFLAG;
 
     //enable isrs
@@ -670,25 +668,25 @@ I2C_DMA_RET I2C_DMA_master_rx(uint8_t *buf, uint16_t transfersize, uint8_t slvad
     // hi2c->XferISR = I2C_DMA_masterrxcont;
     DMA_info * hdma = &hi2c->rxhdma;
 
-    /* Disable the peripheral */
+    // Disable the peripheral 
     hdma->Instance->CCR &= ~DMAENABLEFLAG;
     __asm__ volatile ("dmb\n");
 
-    /* Configure the source, destination address and the data length */
+    // Configure the source, destination address and the data length 
     hdma->DmaBaseAddress->IFCR  = (DMAGLISRFLAG << hdma->ChannelIndex);
 
-    /* Configure DMA Channel data length */
+    // Configure DMA Channel data length 
     hdma->Instance->CNDTR = hi2c->XferCount;
 
-    /* Configure DMA Channel peripherial address */
+    // Configure DMA Channel peripherial address 
     hdma->Instance->CPAR =(uint32_t) &hi2c->Instance->RXDR;
 
-    /* Configure DMA Channel memory address */
+    // Configure DMA Channel memory address 
     hdma->Instance->CMAR =(uint32_t) hi2c->BuffPtr;
 
 
-    /* Enable the transfer complete, & transfer error interrupts */
-    /* Half transfer interrupt is optional: enable it only if associated callback is available */
+    // Enable the transfer complete, & transfer error interrupts 
+    // Half transfer interrupt is optional: enable it only if associated callback is available 
     if(NULL != hdma->XferHalfCpltCallback )
     {
         hdma->Instance->CCR |= (DMATXCPLT | DMATXHALFCPLT | DMATXERRORFLAG);
@@ -698,13 +696,13 @@ I2C_DMA_RET I2C_DMA_master_rx(uint8_t *buf, uint16_t transfersize, uint8_t slvad
         hdma->Instance->CCR |= (DMATXCPLT | DMATXERRORFLAG);
         hdma->Instance->CCR &= ~DMATXHALFCPLT;
     }
-    /* Enable the Peripheral */
+    // Enable the Peripheral 
     __asm__ volatile ("dmb\n");
     hdma->Instance->CCR |= DMAENABLEFLAG;
     
     hi2c->XferCount -= XferSize;
 
-    /* Enable DMA Request */
+    // Enable DMA Request 
     hi2c->Instance->CR1 |= RXDMAENFLAG;
 
     //enable isrs
