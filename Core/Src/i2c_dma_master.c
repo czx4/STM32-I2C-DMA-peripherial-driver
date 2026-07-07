@@ -1,4 +1,5 @@
 #include "i2c_dma_master.h"
+#include "i2c_dma_master_defines.h"
 #include "stm32f303xe.h"
 #include <stdint.h>
 
@@ -11,6 +12,15 @@ enum{
     GPIO_AFR_BITCOUNT           = 0x4,
     GPIO_MODER_SET              = 0x3,
     NORMALIZE_PINS_0_TO_7_MASK  = 0x7,
+
+    GPIOA_AHBENRBIT             =(1 << 17),
+    GPIOB_AHBENRBIT             =(1 << 18),
+    GPIOC_AHBENRBIT             =(1 << 19),
+    GPIOD_AHBENRBIT             =(1 << 20),
+    GPIOE_AHBENRBIT             =(1 << 21),
+    GPIOF_AHBENRBIT             =(1 << 22),
+    GPIOG_AHBENRBIT             =(1 << 23),
+    GPIOH_AHBENRBIT             =(1 << 16),
 
     DMAMEMINCENABLE             = (1 << 7), 
     DMADATAALIGNBYTE            = 0,
@@ -132,6 +142,37 @@ inline static void __attribute__((always_inline)) set_DMA_internals(DMA_info * h
 
 inline static void __attribute__((always_inline)) enable_i2c_clock(uint32_t bit_to_enable){
     RCCB->APB1ENR |= bit_to_enable;
+}
+
+inline static void __attribute__((always_inline)) enable_gpio_clock(uint32_t GPIOX){
+    switch (GPIOX) {
+        case (uint32_t)GPIOA_BASE:
+            set_if_unset_rcc_ahbenr_bit(GPIOA_AHBENRBIT);
+            break;
+        case (uint32_t)GPIOB_BASE:
+            set_if_unset_rcc_ahbenr_bit(GPIOB_AHBENRBIT);
+            break;
+        case (uint32_t)GPIOC_BASE:
+            set_if_unset_rcc_ahbenr_bit(GPIOC_AHBENRBIT);
+            break;
+        case (uint32_t)GPIOD_BASE:
+            set_if_unset_rcc_ahbenr_bit(GPIOD_AHBENRBIT);
+            break;
+        case (uint32_t)GPIOE_BASE:
+            set_if_unset_rcc_ahbenr_bit(GPIOE_AHBENRBIT);
+            break;
+        case (uint32_t)GPIOF_BASE:
+            set_if_unset_rcc_ahbenr_bit(GPIOF_AHBENRBIT);
+            break;
+        case (uint32_t)GPIOG_BASE:
+            set_if_unset_rcc_ahbenr_bit(GPIOG_AHBENRBIT);
+            break;
+        case (uint32_t)GPIOH_BASE:
+            set_if_unset_rcc_ahbenr_bit(GPIOH_AHBENRBIT);
+            break;
+        default:
+            break;
+    }
 }
 
 inline static void __attribute__((always_inline)) I2C_DMA_mastercont(I2C_info *hi2c)
@@ -349,6 +390,12 @@ I2C_DMA_RET I2C_DMA_Init(I2C_Def              *I2C_instance,
         return I2C_INIT_ERROR;
 
     hi2c->Instance = I2C_instance;
+
+    enable_gpio_clock((uint32_t) GPIOONE);
+    if(GPIOONE != GPIOTWO)
+        enable_gpio_clock((uint32_t) GPIOTWO);
+
+    __asm__ volatile("dmb\n");
 
     // set pin speed
     GPIOONE->OSPEEDR |= GPIO_PIN_HIGH_SPD << (pinonenum * 2);
