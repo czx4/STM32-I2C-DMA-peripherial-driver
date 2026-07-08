@@ -431,6 +431,11 @@ I2C_DMA_RET I2C_DMA_Init(I2C_Def              *I2C_instance,
             atomic_store(&hi2c->state, STATE_UNINIT_I2C);
             return DMA_INIT_ERROR;
         }
+
+        // set dma base address, channel index for isr, enable clock and nvic
+        set_DMA_internals(txhdma);
+
+        __asm__ volatile ("dmb\n");
         
         uint32_t tmpdmaccr = txhdma->Instance->CCR;
 
@@ -465,6 +470,11 @@ I2C_DMA_RET I2C_DMA_Init(I2C_Def              *I2C_instance,
             return DMA_INIT_ERROR;
         }
 
+        // set dma base address, channel index for isr, enable clock and nvic
+        set_DMA_internals(rxhdma);
+
+        __asm__ volatile ("dmb\n");
+
         uint32_t tmpdmaccr = rxhdma->Instance->CCR;
 
         //clear dma config
@@ -482,9 +492,6 @@ I2C_DMA_RET I2C_DMA_Init(I2C_Def              *I2C_instance,
 
         // Write to DMA Channel CR register 
         rxhdma->Instance->CCR = tmpdmaccr;
-
-        // calculation of the channel index 
-        set_DMA_internals(rxhdma);
 
         atomic_store(&rxhdma->state, STATE_READY_I2C);
     }
@@ -621,7 +628,7 @@ I2C_DMA_RET I2C_DMA_master_tx(uint8_t *buf, uint16_t bufsize, uint8_t slvaddr, I
     hi2c->Instance->CR1 |= TXDMAENFLAG;
 
     //enable isrs
-    hi2c->Instance->CR1 |= (ERRIEFLAG | NACKFLAG);
+    hi2c->Instance->CR1 |= (ERRIEFLAG | NACKFLAG | STOPFLAG);
     __asm__ volatile ("dmb\n");
 
     //start tx
@@ -706,7 +713,7 @@ I2C_DMA_RET I2C_DMA_master_rx(uint8_t *buf, uint16_t transfersize, uint8_t slvad
     hi2c->Instance->CR1 |= RXDMAENFLAG;
 
     //enable isrs
-    hi2c->Instance->CR1 |= (ERRIEFLAG | NACKFLAG);
+    hi2c->Instance->CR1 |= (ERRIEFLAG | NACKFLAG | STOPFLAG);
     __asm__ volatile ("dmb\n");
 
     //start tx
