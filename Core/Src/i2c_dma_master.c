@@ -202,13 +202,22 @@ inline static void __attribute__((always_inline)) I2C_DMA_mastercont(I2C_info *h
             {
                 XferSize = MAX_I2C_BUF_SIZE;
                 // Set the new XferSize in Nbytes register 
-                hi2c->Instance->CR2 |= (MAX_I2C_BUF_SIZE << NBYTESSHIFT) | I2CRELOADCR2;
+                // hi2c->Instance->CR2 |= (MAX_I2C_BUF_SIZE << NBYTESSHIFT) | I2CRELOADCR2;
+                hi2c->Instance->CR2 |= (MAX_I2C_BUF_SIZE << NBYTESSHIFT);
             }
             else
             {
                 XferSize = hi2c->XferCount;
                 // Set the new XferSize in Nbytes register 
-                hi2c->Instance->CR2 |= (XferSize << NBYTESSHIFT) | I2CAUTOENDCR2;
+                // hi2c->Instance->CR2 |= (XferSize << NBYTESSHIFT) | I2CAUTOENDCR2;
+                uint32_t tmpcr2 = hi2c->Instance->CR2;
+
+                tmpcr2 |= I2CAUTOENDCR2;
+                tmpcr2 &= ~(MAX_I2C_BUF_SIZE << NBYTESSHIFT);
+                tmpcr2 |= (XferSize << NBYTESSHIFT);
+                tmpcr2 &= ~I2CRELOADCR2;
+
+                hi2c->Instance->CR2 = tmpcr2;
             }
 
             // Update XferCount value 
@@ -288,8 +297,8 @@ inline static void __attribute__((always_inline)) I2C_DMA_errorhandle(I2C_info *
 
     uint32_t dmacheck = hi2c->Instance->CR1;
     // Disable all relevant interrupts and dma except rxie and slave flags and smbus flags
-    // hi2c->Instance->CR1 &= ~(TXDMAENFLAG | RXDMAENFLAG | ERRIEFLAG | TCIEFLAG | STOPFLAG | NACKFLAG | TXIEFLAG);
-    hi2c->Instance->CR1 &= ~(TXDMAENFLAG | RXDMAENFLAG);
+    hi2c->Instance->CR1 &= ~(TXDMAENFLAG | RXDMAENFLAG | ERRIEFLAG | TCIEFLAG | STOPFLAG | NACKFLAG);
+    // hi2c->Instance->CR1 &= ~(TXDMAENFLAG | RXDMAENFLAG);
 
     __asm__ volatile ("dmb\n");
 
@@ -304,12 +313,12 @@ inline static void __attribute__((always_inline)) I2C_DMA_errorhandle(I2C_info *
     //clear relevant error interrupts
     hi2c->Instance->ICR = tmperror;
     
+    //reset sequence
     __asm__ volatile ("dmb\n");
     hi2c->Instance->CR1 &= ~I2CENABLE;
-    hi2c->Instance->CR1;
+    if(hi2c->Instance->CR1 == 0){};
     __asm__ volatile ("dmb\n");
     hi2c->Instance->CR1 |= I2CENABLE;
-    __asm__ volatile ("dmb\n");
 
     atomic_store(&hi2c->state, STATE_READY_I2C);
     /* 
@@ -333,24 +342,24 @@ void I2C1_ER_IRQHandler(void) // only for master
 #ifdef USING_I2C2
 void I2C2_EV_IRQHandler(void)
 {
-    I2C_DMA_mastercont(&I2Cs[I2C1_POS]);
+    I2C_DMA_mastercont(&I2Cs[I2C2_POS]);
 }
 
 void I2C2_ER_IRQHandler(void) // only for master 
 {
-    I2C_DMA_errorhandle(&I2Cs[I2C1_POS]);
+    I2C_DMA_errorhandle(&I2Cs[I2C2_POS]);
 }
 #endif
 
 #ifdef USING_I2C3
 void I2C3_EV_IRQHandler(void)
 {
-    I2C_DMA_mastercont(&I2Cs[I2C1_POS]);
+    I2C_DMA_mastercont(&I2Cs[I2C3_POS]);
 }
 
 void I2C3_ER_IRQHandler(void) // only for master 
 {
-    I2C_DMA_errorhandle(&I2Cs[I2C1_POS]);
+    I2C_DMA_errorhandle(&I2Cs[I2C3_POS]);
 }
 #endif
 
@@ -455,9 +464,6 @@ I2C_DMA_RET I2C_DMA_Init(I2C_Def              *I2C_instance,
         // Write to DMA Channel CR register 
         __asm__ volatile ("dmb\n");
         txhdma->Instance->CCR = tmpdmaccr;
-
-        // calculation of the channel index 
-        set_DMA_internals(txhdma);
 
         atomic_store(&txhdma->state, STATE_READY_I2C); 
     }
@@ -566,11 +572,13 @@ I2C_DMA_RET I2C_DMA_master_tx(uint8_t *buf, uint16_t bufsize, uint8_t slvaddr, I
         return DMA_BUSY;
     }
 
-    uint32_t tmpcr2 = 0;
+    uint32_t tmpcr2 = hi2c->Instance->CR2;
+    tmpcr2 &= CLEARCR2;
+
     uint8_t XferSize = 0;
     if(bufsize > MAX_I2C_BUF_SIZE){
         XferSize = MAX_I2C_BUF_SIZE;
-        tmpcr2 = I2CRELOADCR2;
+        tmpcr2 = I2CRELOADCR2 | I2CAUTOENDCR2;
     }
     else{
         XferSize = bufsize;
@@ -628,7 +636,7 @@ I2C_DMA_RET I2C_DMA_master_tx(uint8_t *buf, uint16_t bufsize, uint8_t slvaddr, I
     hi2c->Instance->CR1 |= TXDMAENFLAG;
 
     //enable isrs
-    hi2c->Instance->CR1 |= (ERRIEFLAG | NACKFLAG | STOPFLAG);
+    hi2c->Instance->CR1 |= (TCIEFLAG | ERRIEFLAG | NACKFLAG | STOPFLAG);
     __asm__ volatile ("dmb\n");
 
     //start tx
@@ -650,11 +658,13 @@ I2C_DMA_RET I2C_DMA_master_rx(uint8_t *buf, uint16_t transfersize, uint8_t slvad
         return DMA_BUSY;
     }
 
-    uint32_t tmpcr2 = 0;
+    uint32_t tmpcr2 = hi2c->Instance->CR2;
+    tmpcr2 &= CLEARCR2;
+
     uint8_t XferSize = 0;
     if(transfersize > MAX_I2C_BUF_SIZE){
         XferSize = MAX_I2C_BUF_SIZE;
-        tmpcr2 = I2CRELOADCR2;
+        tmpcr2 = I2CRELOADCR2 | I2CAUTOENDCR2;
     }
     else{
         XferSize = transfersize;
@@ -713,7 +723,7 @@ I2C_DMA_RET I2C_DMA_master_rx(uint8_t *buf, uint16_t transfersize, uint8_t slvad
     hi2c->Instance->CR1 |= RXDMAENFLAG;
 
     //enable isrs
-    hi2c->Instance->CR1 |= (ERRIEFLAG | NACKFLAG | STOPFLAG);
+    hi2c->Instance->CR1 |= (TCIEFLAG | ERRIEFLAG | NACKFLAG | STOPFLAG);
     __asm__ volatile ("dmb\n");
 
     //start tx

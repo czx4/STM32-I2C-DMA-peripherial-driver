@@ -169,7 +169,6 @@ inline void __attribute__((always_inline)) disable_dma(DMA_info * hdma){
     //clear dma number of data to transfer
     hdma->Instance->CNDTR = 0;
 
-    __asm__ volatile ("dmb\n");
     atomic_store(&hdma->state, STATE_READY_I2C);
 }
 
