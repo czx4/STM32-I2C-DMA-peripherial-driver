@@ -8,7 +8,7 @@
 #define SCB_BASE            (SCS_BASE +  0x0D00UL)                    // System Control Block Base Address
 
 #define SCB_AIRCR_PRIOGR_POS              8                                            // SCB AIRCR: PRIGROUP Position 
-#define SCB_AIRCR_PRIOGR_MASK             (7 << SCB_AIRCR_PRIGROUP_Pos)                // SCB AIRCR: PRIGROUP Mask 
+#define SCB_AIRCR_PRIOGR_MASK             (7 << SCB_AIRCR_PRIOGR_POS)                // SCB AIRCR: PRIGROUP Mask 
 typedef struct
 {
     volatile const  uint32_t CPUID;           // Offset: 0x000 (R/ )  CPUID Base Register 
